@@ -8,41 +8,32 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ---- health (sin auth) ----
+// ✅ health (sin auth)
 app.get("/health", (_req, res) => res.status(200).send("OK"));
 
-// ---- auth simple por API key ----
+// ✅ auth por API key (Base44 llamará con x-api-key)
 function apiKeyAuth(req, res, next) {
   const expected = process.env.MYBOT_API_KEY;
   const key = req.headers["x-api-key"];
 
-  if (!expected) {
-    return res.status(500).json({ error: "Server misconfigured: MYBOT_API_KEY not set" });
-  }
-  if (!key || key !== expected) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  if (!expected) return res.status(500).json({ error: "MYBOT_API_KEY not set" });
+  if (!key || key !== expected) return res.status(401).json({ error: "Unauthorized" });
+
   next();
 }
 
-// OJO: el health va antes, y a partir de aquí todo protegido:
 app.use(apiKeyAuth);
 
-// ---- Postgres (Railway) ----
-if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL not set");
-  // no hago process.exit() para que Railway muestre logs y puedas verlo claro
-}
-
+// ✅ Postgres (Railway)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Si te da guerra SSL: setea PGSSLMODE=disable en Railway.
+  // Si te da por saco SSL: pon PGSSLMODE=disable en Railway
   ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
 });
 
-// ---- endpoints ----
+// ---------- ENDPOINTS ----------
 
-// KPI overview
+// KPIs overview
 app.get("/metrics/overview", async (req, res) => {
   try {
     const { restaurant_id } = req.query;
@@ -61,12 +52,14 @@ app.get("/metrics/overview", async (req, res) => {
       [restaurant_id]
     );
 
-    res.json(rows[0] ?? {
-      total_calls: 0,
-      calls_with_reservation: 0,
-      avg_duration_seconds: 0,
-      active_calls: 0
-    });
+    res.json(
+      rows[0] ?? {
+        total_calls: 0,
+        calls_with_reservation: 0,
+        avg_duration_seconds: 0,
+        active_calls: 0,
+      }
+    );
   } catch (e) {
     console.error("metrics/overview error:", e);
     res.status(500).json({ error: "internal_error" });
@@ -109,7 +102,7 @@ app.get("/metrics/calls", async (req, res) => {
   }
 });
 
-// actualizar restaurante (panel Base44)
+// update settings restaurante
 app.patch("/restaurants/:id", async (req, res) => {
   try {
     const { id } = req.params;
