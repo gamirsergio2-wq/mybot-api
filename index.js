@@ -8,10 +8,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ✅ health (sin auth)
+// ===== helpers =====
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(v) {
+  return typeof v === "string" && UUID_RE.test(v);
+}
+
+// ---- health (sin auth) ----
 app.get("/health", (_req, res) => res.status(200).send("OK"));
 
-// ✅ auth por API key (Base44 llamará con x-api-key)
+// ---- auth simple por API key ----
 function apiKeyAuth(req, res, next) {
   const expected = process.env.MYBOT_API_KEY;
   const key = req.headers["x-api-key"];
@@ -24,20 +32,48 @@ function apiKeyAuth(req, res, next) {
 
 app.use(apiKeyAuth);
 
-// ✅ Postgres (Railway)
+// ---- Postgres (Railway) ----
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Si te da por saco SSL: pon PGSSLMODE=disable en Railway
   ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
 });
 
-// ---------- ENDPOINTS ----------
+// Opcional: comprobar conexión al boot (no bloquea si falla)
+pool
+  .query("SELECT 1")
+  .then(() => console.log("✅ Postgres connected"))
+  .catch((e) => console.error("❌ Postgres connect error:", e?.message || e));
 
-// KPIs overview
+// ---- endpoints ----
+
+// Lista rápida de restaurantes (para sacar el restaurant_id sin entrar al DB)
+app.get("/restaurants", async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "25", 10), 1), 200);
+
+    const { rows } = await pool.query(
+      `
+      SELECT id, name, timezone, language_default, public_phone, provider, created_at, updated_at
+      FROM restaurants
+      ORDER BY created_at DESC
+      LIMIT $1
+      `,
+      [limit]
+    );
+
+    res.json({ rows });
+  } catch (e) {
+    console.error("restaurants list error:", e);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// KPI overview: llamadas totales, con reserva, duración media, activas
 app.get("/metrics/overview", async (req, res) => {
   try {
     const { restaurant_id } = req.query;
     if (!restaurant_id) return res.status(400).json({ error: "restaurant_id is required" });
+    if (!isUuid(restaurant_id)) return res.status(400).json({ error: "restaurant_id must be a UUID" });
 
     const { rows } = await pool.query(
       `
@@ -52,25 +88,19 @@ app.get("/metrics/overview", async (req, res) => {
       [restaurant_id]
     );
 
-    res.json(
-      rows[0] ?? {
-        total_calls: 0,
-        calls_with_reservation: 0,
-        avg_duration_seconds: 0,
-        active_calls: 0,
-      }
-    );
+    res.json(rows[0] ?? { total_calls: 0, calls_with_reservation: 0, avg_duration_seconds: 0, active_calls: 0 });
   } catch (e) {
     console.error("metrics/overview error:", e);
     res.status(500).json({ error: "internal_error" });
   }
 });
 
-// últimas llamadas
+// últimas llamadas (para tabla)
 app.get("/metrics/calls", async (req, res) => {
   try {
     const { restaurant_id, limit } = req.query;
     if (!restaurant_id) return res.status(400).json({ error: "restaurant_id is required" });
+    if (!isUuid(restaurant_id)) return res.status(400).json({ error: "restaurant_id must be a UUID" });
 
     const lim = Math.min(Math.max(parseInt(limit || "50", 10), 1), 200);
 
@@ -102,10 +132,12 @@ app.get("/metrics/calls", async (req, res) => {
   }
 });
 
-// update settings restaurante
+// actualizar ajustes del restaurante desde el panel (Base44)
 app.patch("/restaurants/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isUuid(id)) return res.status(400).json({ error: "id must be a UUID" });
+
     const { name, timezone, language_default, public_phone, provider, provider_config } = req.body || {};
 
     const { rows } = await pool.query(
