@@ -16,23 +16,33 @@ function apiKeyAuth(req, res, next) {
   const expected = process.env.MYBOT_API_KEY;
   const key = req.headers["x-api-key"];
 
-  if (!expected) return res.status(500).json({ error: "MYBOT_API_KEY not set" });
-  if (!key || key !== expected) return res.status(401).json({ error: "Unauthorized" });
-
+  if (!expected) {
+    return res.status(500).json({ error: "Server misconfigured: MYBOT_API_KEY not set" });
+  }
+  if (!key || key !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   next();
 }
 
+// OJO: el health va antes, y a partir de aquí todo protegido:
 app.use(apiKeyAuth);
 
 // ---- Postgres (Railway) ----
+if (!process.env.DATABASE_URL) {
+  console.error("❌ DATABASE_URL not set");
+  // no hago process.exit() para que Railway muestre logs y puedas verlo claro
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  // Si te da guerra SSL: setea PGSSLMODE=disable en Railway.
   ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
 });
 
 // ---- endpoints ----
 
-// KPI overview: llamadas totales, con reserva, duración media, activas
+// KPI overview
 app.get("/metrics/overview", async (req, res) => {
   try {
     const { restaurant_id } = req.query;
@@ -51,14 +61,19 @@ app.get("/metrics/overview", async (req, res) => {
       [restaurant_id]
     );
 
-    res.json(rows[0] ?? { total_calls: 0, calls_with_reservation: 0, avg_duration_seconds: 0, active_calls: 0 });
+    res.json(rows[0] ?? {
+      total_calls: 0,
+      calls_with_reservation: 0,
+      avg_duration_seconds: 0,
+      active_calls: 0
+    });
   } catch (e) {
     console.error("metrics/overview error:", e);
     res.status(500).json({ error: "internal_error" });
   }
 });
 
-// últimas llamadas (para tabla)
+// últimas llamadas
 app.get("/metrics/calls", async (req, res) => {
   try {
     const { restaurant_id, limit } = req.query;
@@ -94,7 +109,7 @@ app.get("/metrics/calls", async (req, res) => {
   }
 });
 
-// actualizar ajustes del restaurante desde el panel (Base44)
+// actualizar restaurante (panel Base44)
 app.patch("/restaurants/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -134,4 +149,4 @@ app.patch("/restaurants/:id", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 mybot-api (single) on port", PORT));
+app.listen(PORT, () => console.log("🚀 mybot-api on port", PORT));
